@@ -3,7 +3,7 @@
 # @Author: spywhere
 # @Date:   2015-10-02 09:54:10
 # @Last Modified by:   Sirisak Lueangsaksri
-# @Last Modified time: 2015-10-06 18:10:31
+# @Last Modified time: 2015-10-08 10:12:45
 
 import json
 import re
@@ -20,10 +20,14 @@ MACRO_PATTERN = re.compile("<%(\\w+)(:(.*[^%>]))?%>")
 DATA_PATTERN = re.compile("<<([\\w-]+(\\.[\\w-]+)*)>>")
 
 
-def is_expected_json(actual, expect, critical=True, last_key=None):
-    last_key = last_key or []
+def is_expected_json(actual, expect, critical=True, path=None):
+    path = path or []
     if type(actual) != type(expect):
-        return "Expected \"%s\" but got \"%s\" instead" % (expect, actual)
+        return "Expected \"%s\"%s but got \"%s\" instead" % (
+            expect,
+            " in the \"%s\"" % (".".join(path)) if path else "",
+            actual
+        )
 
     if (isinstance(expect, dict) or isinstance(expect, list) or
             isinstance(expect, tuple)):
@@ -36,16 +40,14 @@ def is_expected_json(actual, expect, critical=True, last_key=None):
                 if ex_key not in actual:
                     return "Expected \"%s\" in the %s" % (
                         ex_key,
-                        "actual dict"
-                        if not last_key
-                        else ("\"%s\" key" % (".".join(last_key)))
+                        "\"%s\"" % (".".join(path)) if path else "actual dict"
                     )
             else:
                 return is_expected_json(
                     actual[ex_key],
                     ex_val,
                     critical,
-                    last_key + [str(ex_key)]
+                    path + [str(ex_key)]
                 )
             if (isinstance(ex_val, dict) or isinstance(ex_val, list) or
                     isinstance(ex_val, tuple)):
@@ -53,13 +55,13 @@ def is_expected_json(actual, expect, critical=True, last_key=None):
                     actual[ex_key],
                     expect[ex_key],
                     critical,
-                    last_key + [str(ex_key)]
+                    path + [str(ex_key)]
                 )
             assert_error = is_expected_json(
                 actual[ex_key],
                 ex_val,
                 critical,
-                last_key + [str(ex_key)]
+                path + [str(ex_key)]
             )
             if assert_error:
                 return assert_error
@@ -69,9 +71,9 @@ def is_expected_json(actual, expect, critical=True, last_key=None):
             return None
         else:
             return "Expected \"%s\"%s but got \"%s\" instead" % (
-                expect, ""
-                if not last_key
-                else (" in the \"%s\"" % (".".join(last_key))), actual
+                expect,
+                " in the \"%s\"" % (".".join(path)) if path else "",
+                actual
             )
 
 
@@ -107,7 +109,7 @@ def process_macro(body):
 def gather_data(data, key, root=True):
     keys = key.split(".")
     if not keys:
-        return data
+        return str(data)
     if isinstance(data, list) or isinstance(data, tuple):
         try:
             index = int(keys[0])
@@ -129,7 +131,7 @@ def gather_data(data, key, root=True):
             return gather_data(data[keys[0]], ".".join(keys[1:]), True)
         return gather_data(data[keys[0]], ".".join(keys[1:]), False)
     else:
-        return data
+        return str(data)
 
 
 def process_raw_data(body, data):
@@ -177,13 +179,13 @@ def run_test(test_suite, critical=True, parent=None, aux=None):
     post_body = None
     expected_json = {}
     if "setup" in test_suite:
-        setup_error = run_test(
+        setup_status = run_test(
             test_suite["setup"],
             False,
             parent,
             "setup"
         )
-        if setup_error:
+        if not setup_status:
             return False
     if "get" in test_suite:
         get_body = process_body_data(
@@ -211,9 +213,9 @@ def run_test(test_suite, critical=True, parent=None, aux=None):
         )
 
     if host and path and expected_json:
-        if not aux:
+        if not aux or verbose:
             print("Running %s... " % (name), end="")
-        else:
+        elif aux in ["setup", "teardown"]:
             print("Running auxillary %s request... " % (aux), end="")
         req = urllib.request.Request(
             host + path + "?" + urllib.parse.urlencode(
@@ -240,7 +242,8 @@ def run_test(test_suite, critical=True, parent=None, aux=None):
                 "teardown"
             )
         if assert_error:
-            print("failed")
+            if not aux or aux in ["setup", "teardown"] or verbose:
+                print("failed")
             print(assert_error)
             if FLAGS["verbose"] or verbose:
                 print(("=" * 10) + " FAILED " + ("=" * 10))
@@ -249,7 +252,8 @@ def run_test(test_suite, critical=True, parent=None, aux=None):
             if critical:
                 return False
         else:
-            print("pass")
+            if not aux or aux in ["setup", "teardown"] or verbose:
+                print("pass")
             if FLAGS["verbose"] or verbose:
                 print(("=" * 10) + " PASS " + ("=" * 10))
                 print(json.dumps(actual_json, indent="  ", ensure_ascii=False))
@@ -257,7 +261,12 @@ def run_test(test_suite, critical=True, parent=None, aux=None):
 
     if "tests" in test_suite:
         for test in test_suite["tests"]:
-            if not run_test(test, critical, test_suite):
+            if not run_test(
+                test,
+                critical,
+                test_suite,
+                (aux + "-sub") if aux else aux
+            ):
                 return False
     return True
 

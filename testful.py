@@ -3,7 +3,7 @@
 # @Author: spywhere
 # @Date:   2015-10-02 09:54:10
 # @Last Modified by:   Sirisak Lueangsaksri
-# @Last Modified time: 2015-10-09 16:52:38
+# @Last Modified time: 2015-10-09 18:10:48
 
 import json
 import os
@@ -24,6 +24,7 @@ MACRO_PATTERN = re.compile("<%(\\w+)(:(.*[^%>]))?%>")
 DATA_PATTERN = re.compile("<<([\\w-]+(\\.[\\w-]+)*)>>")
 TEST_SUITE_FILE_NAME = "test_config.yaml"
 TEST_RESULT_FILE_NAME = "results.testful"
+DEFAULT_DATE_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def load_data(raw_data):
@@ -114,7 +115,7 @@ def gather_special_macro(name, format):
         if format:
             return time.strftime(format)
         else:
-            return str(int(time.time()))
+            return time.strftime(DEFAULT_DATE_TIME_FORMAT)
     return ""
 
 

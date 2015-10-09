@@ -69,7 +69,7 @@ Format: `<%Identifier%>` or `<%Identifier:Modifier%>`
 
 Input macro will ask for the input data and replace the macro with it.
 
-By default, macro will look up from the input map file for the missing key if the value is not found, user input will be asked instead. After receiving the value (from any source), the macro is set and will be reuse for the whole procedure.
+By default, macro will look up from the input map file for the missing key, if the value is not found, user input will be asked instead. After receiving the value (from any source), the macro is set and will be reuse for the whole procedure.
 
 Macros is a file global variable and cannot be accessed across the different files.
 
@@ -78,8 +78,13 @@ Special macro has a dynamic return value which can be changed based on current c
 
 You can override the special macro with normal macro by simply create a macro with the same name with the special macro you want to replace.
 
-- `datetime:<Format>`  
+- Date Time  
+**Identifier**: `datetime`  
+**Modifier**: [Python's date time format](https://docs.python.org/2/library/datetime.html#strftime-and-strptime-behavior)  
 Returns the formatted date time specified by format modifier.
+
+**Example**:  
+`<%datetime:%d/%m/%Y%>` will returns `09/10/2015`.
 
 #### Response Data Macro
 Format: `<<Query>>` or `<<Identifier.Query>>`

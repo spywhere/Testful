@@ -1,0 +1,10 @@
+run_test: true
+generate_result: true
+
+deployment:
+- sit
+- uat
+
+input: tests/InputMap.json
+tests:
+- tests/ServiceTest.json

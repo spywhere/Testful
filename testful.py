@@ -3,7 +3,7 @@
 # @Author: spywhere
 # @Date:   2015-10-02 09:54:10
 # @Last Modified by:   Sirisak Lueangsaksri
-# @Last Modified time: 2015-10-09 10:52:10
+# @Last Modified time: 2015-10-09 16:52:38
 
 import json
 import os
@@ -11,21 +11,48 @@ import re
 import sys
 import time
 import urllib.request
+import yaml
 
 FLAGS = {
-    "verbose": False
+    "verbose": False,
+    "yaml": False
 }
 INPUT_MAP = {}
 SPECIAL_MACROS = ["datetime"]
 MACROS = {}
-COMMENT_PATTERN = re.compile("\\s*//.*$")
 MACRO_PATTERN = re.compile("<%(\\w+)(:(.*[^%>]))?%>")
 DATA_PATTERN = re.compile("<<([\\w-]+(\\.[\\w-]+)*)>>")
-TEST_SUITE_FILE_NAME = "test_config.json"
+TEST_SUITE_FILE_NAME = "test_config.yaml"
 TEST_RESULT_FILE_NAME = "results.testful"
 
 
-def is_expected_json(actual, expect, critical=True, path=None):
+def load_data(raw_data):
+    return yaml.load(raw_data)
+
+
+def represent_data(data):
+    if FLAGS["yaml"]:
+        return yaml.dump(data, allow_unicode=True, default_flow_style=False)
+    else:
+        return json.dumps(data, indent="  ", ensure_ascii=False)
+
+
+def save_data(data, out_file=None):
+    if out_file:
+        return yaml.dump(data, out_file, allow_unicode=True, default_flow_style=False)
+    else:
+        return yaml.dump(data, allow_unicode=True)
+
+
+def from_json(raw_data):
+    return json.loads(raw_data)
+
+
+def to_json(data):
+    return json.dumps(data)
+
+
+def is_expected_data(actual, expect, critical=True, path=None):
     path = path or []
     if type(actual) != type(expect):
         return "Expected \"%s\"%s but got \"%s\" instead" % (
@@ -48,7 +75,7 @@ def is_expected_json(actual, expect, critical=True, path=None):
                         "\"%s\"" % (".".join(path)) if path else "actual dict"
                     )
             else:
-                return is_expected_json(
+                return is_expected_data(
                     actual[ex_key],
                     ex_val,
                     critical,
@@ -56,13 +83,13 @@ def is_expected_json(actual, expect, critical=True, path=None):
                 )
             if (isinstance(ex_val, dict) or isinstance(ex_val, list) or
                     isinstance(ex_val, tuple)):
-                return is_expected_json(
+                return is_expected_data(
                     actual[ex_key],
                     expect[ex_key],
                     critical,
                     path + [str(ex_key)]
                 )
-            assert_error = is_expected_json(
+            assert_error = is_expected_data(
                 actual[ex_key],
                 ex_val,
                 critical,
@@ -106,17 +133,13 @@ def gather_macro(key, type=None):
     return value
 
 
-def load_json(json_data):
-    return json.loads(json_data)
-
-
 def process_macro(body):
-    json_data = json.dumps(body)
-    json_data = MACRO_PATTERN.sub(
+    data = save_data(body)
+    data = MACRO_PATTERN.sub(
         lambda m: gather_macro(m.group(1), m.group(3)),
-        json_data
+        data
     )
-    return load_json(json_data)
+    return load_data(data)
 
 
 def gather_data(data, key, root=True):
@@ -155,8 +178,8 @@ def process_raw_data(body, data):
 
 
 def process_body_data(body, data):
-    json_data = json.dumps(body)
-    return load_json(process_raw_data(json_data, data))
+    data_obj = save_data(body)
+    return load_data(process_raw_data(data_obj, data))
 
 
 def run_test(test_suite, namespace, result_file=None, critical=True,
@@ -210,7 +233,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
         )
         if FLAGS["verbose"] or verbose:
             print(("=" * 10) + " GET " + ("=" * 10))
-            print(json.dumps(get_body, indent="  ", ensure_ascii=False))
+            print(represent_data(get_body))
             print("-" * 25)
     if "post" in test_suite:
         post_body = process_body_data(
@@ -219,7 +242,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
         )
         if FLAGS["verbose"] or verbose:
             print(("=" * 10) + " POST " + ("=" * 10))
-            print(json.dumps(post_body, indent="  ", ensure_ascii=False))
+            print(represent_data(post_body))
             print("-" * 26)
 
     if "expected_json" in test_suite:
@@ -243,15 +266,15 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
 
         if post_body:
             req.add_header("Content-Type", "application/json")
-            post_body = json.dumps(post_body).encode()
+            post_body = to_json(post_body).encode()
         response = urllib.request.urlopen(req, post_body)
 
-        actual_json = load_json(response.read().decode())
+        actual_json = from_json(response.read().decode())
         if "parent_response" not in test_suite:
             test_suite["parent_response"] = {}
         test_suite["parent_response"][identifier] = actual_json
 
-        assert_error = is_expected_json(actual_json, expected_json, critical)
+        assert_error = is_expected_data(actual_json, expected_json, critical)
         elapse_time = time.time() - start_time
         if assert_error:
             if not aux or aux in ["setup", "teardown"] or verbose:
@@ -263,7 +286,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
             print(assert_error)
             if FLAGS["verbose"] or verbose:
                 print(("=" * 10) + " FAILED " + ("=" * 10))
-                print(json.dumps(actual_json, indent="  ", ensure_ascii=False))
+                print(represent_data(actual_json))
                 print("-" * 28)
             if critical:
                 test_passed = False
@@ -276,7 +299,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
                     ))
             if FLAGS["verbose"] or verbose:
                 print(("=" * 10) + " PASS " + ("=" * 10))
-                print(json.dumps(actual_json, indent="  ", ensure_ascii=False))
+                print(represent_data(actual_json))
                 print("-" * 26)
 
     if test_passed:
@@ -315,6 +338,10 @@ def run(args):
             "specified the input map file"
         )
         print(
+            "--json         : " +
+            "represent all object as in a JSON format"
+        )
+        print(
             "--no-result    : " +
             "do not generate testing result files (override config)"
         )
@@ -326,6 +353,10 @@ def run(args):
             "--verbose      : " +
             "print all the request and response body"
         )
+        print(
+            "--yaml         : " +
+            "represent all object as in a YAML format"
+        )
         return
 
     global INPUT_MAP, FLAGS
@@ -336,6 +367,12 @@ def run(args):
     if "--verbose" in args:
         FLAGS["verbose"] = True
         args.remove("--verbose")
+    if "--json" in args:
+        FLAGS["yaml"] = False
+        args.remove("--json")
+    if "--yaml" in args:
+        FLAGS["yaml"] = True
+        args.remove("--yaml")
     if "--result" in args:
         generate_result = True
         args.remove("--result")
@@ -354,7 +391,7 @@ def run(args):
             print("No test suite found")
             exit(1)
         test_suite_file = open(TEST_SUITE_FILE_NAME, "r", encoding="utf-8")
-        test_suite = load_json(test_suite_file.read())
+        test_suite = load_data(test_suite_file.read())
         test_suite_file.close()
         if "run_test" in test_suite and not test_suite["run_test"]:
             print("Skip testing")
@@ -376,7 +413,7 @@ def run(args):
 
     if input_file_name and os.path.exists(input_file_name):
         input_file = open(input_file_name, "r", encoding="utf-8")
-        INPUT_MAP = load_json(input_file.read())
+        INPUT_MAP = load_data(input_file.read())
         input_file.close()
         print(":: Input loaded: %s ::" % (input_file_name))
 
@@ -393,7 +430,7 @@ def run(args):
             print(":: Test is not found: %s ::" % (test_file_name))
             continue
         test_file = open(test_file_name, "r", encoding="utf-8")
-        test = load_json(test_file.read())
+        test = load_data(test_file.read())
         test_file.close()
         print(":: Test loaded: %s ::" % (test_file_name))
 

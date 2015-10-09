@@ -3,9 +3,10 @@
 # @Author: spywhere
 # @Date:   2015-10-02 09:54:10
 # @Last Modified by:   Sirisak Lueangsaksri
-# @Last Modified time: 2015-10-08 10:12:45
+# @Last Modified time: 2015-10-09 10:52:10
 
 import json
+import os
 import re
 import sys
 import time
@@ -14,10 +15,14 @@ import urllib.request
 FLAGS = {
     "verbose": False
 }
+INPUT_MAP = {}
 SPECIAL_MACROS = ["datetime"]
 MACROS = {}
+COMMENT_PATTERN = re.compile("\\s*//.*$")
 MACRO_PATTERN = re.compile("<%(\\w+)(:(.*[^%>]))?%>")
 DATA_PATTERN = re.compile("<<([\\w-]+(\\.[\\w-]+)*)>>")
+TEST_SUITE_FILE_NAME = "test_config.json"
+TEST_RESULT_FILE_NAME = "results.testful"
 
 
 def is_expected_json(actual, expect, critical=True, path=None):
@@ -87,14 +92,22 @@ def gather_special_macro(name, format):
 
 
 def gather_macro(key, type=None):
-    if key in SPECIAL_MACROS:
-        return gather_special_macro(key, type)
-    global MACROS
+    global INPUT_LINES, MACROS
     if key in MACROS:
         return MACROS[key]
-    value = input(key + ": ")
+    if key in SPECIAL_MACROS:
+        return gather_special_macro(key, type)
+    if key in INPUT_MAP:
+        value = str(INPUT_MAP[key])
+        print("%s: %s" % (key, value))
+    else:
+        value = input(key + ": ")
     MACROS[key] = value
     return value
+
+
+def load_json(json_data):
+    return json.loads(json_data)
 
 
 def process_macro(body):
@@ -103,7 +116,7 @@ def process_macro(body):
         lambda m: gather_macro(m.group(1), m.group(3)),
         json_data
     )
-    return json.loads(json_data)
+    return load_json(json_data)
 
 
 def gather_data(data, key, root=True):
@@ -143,10 +156,11 @@ def process_raw_data(body, data):
 
 def process_body_data(body, data):
     json_data = json.dumps(body)
-    return json.loads(process_raw_data(json_data, data))
+    return load_json(process_raw_data(json_data, data))
 
 
-def run_test(test_suite, critical=True, parent=None, aux=None):
+def run_test(test_suite, namespace, result_file=None, critical=True,
+             parent=None, aux=None):
     parent = parent or {}
     parent_response = {}
     if "parent_response" in parent:
@@ -181,6 +195,8 @@ def run_test(test_suite, critical=True, parent=None, aux=None):
     if "setup" in test_suite:
         setup_status = run_test(
             test_suite["setup"],
+            namespace,
+            result_file,
             False,
             parent,
             "setup"
@@ -212,7 +228,9 @@ def run_test(test_suite, critical=True, parent=None, aux=None):
             parent_response
         )
 
+    test_passed = True
     if host and path and expected_json:
+        start_time = time.time()
         if not aux or verbose:
             print("Running %s... " % (name), end="")
         elif aux in ["setup", "teardown"]:
@@ -228,65 +246,163 @@ def run_test(test_suite, critical=True, parent=None, aux=None):
             post_body = json.dumps(post_body).encode()
         response = urllib.request.urlopen(req, post_body)
 
-        actual_json = json.loads(response.read().decode())
+        actual_json = load_json(response.read().decode())
         if "parent_response" not in test_suite:
             test_suite["parent_response"] = {}
         test_suite["parent_response"][identifier] = actual_json
 
         assert_error = is_expected_json(actual_json, expected_json, critical)
-        if "teardown" in test_suite:
-            run_test(
-                test_suite["teardown"],
-                False,
-                test_suite,
-                "teardown"
-            )
+        elapse_time = time.time() - start_time
         if assert_error:
             if not aux or aux in ["setup", "teardown"] or verbose:
-                print("failed")
+                print("failed (%.2fs)" % (elapse_time))
+                if result_file:
+                    result_file.write("%s|%s|%.2f|fail\n" % (
+                        namespace, name, elapse_time
+                    ))
             print(assert_error)
             if FLAGS["verbose"] or verbose:
                 print(("=" * 10) + " FAILED " + ("=" * 10))
                 print(json.dumps(actual_json, indent="  ", ensure_ascii=False))
                 print("-" * 28)
             if critical:
-                return False
+                test_passed = False
         else:
             if not aux or aux in ["setup", "teardown"] or verbose:
-                print("pass")
+                print("passed (%.2fs)" % (elapse_time))
+                if result_file:
+                    result_file.write("%s|%s|%.2f|pass\n" % (
+                        namespace, name, elapse_time
+                    ))
             if FLAGS["verbose"] or verbose:
                 print(("=" * 10) + " PASS " + ("=" * 10))
                 print(json.dumps(actual_json, indent="  ", ensure_ascii=False))
                 print("-" * 26)
 
-    if "tests" in test_suite:
-        for test in test_suite["tests"]:
-            if not run_test(
-                test,
-                critical,
-                test_suite,
-                (aux + "-sub") if aux else aux
-            ):
-                return False
-    return True
+    if test_passed:
+        if "tests" in test_suite:
+            for test in test_suite["tests"]:
+                run_test(
+                    test,
+                    namespace,
+                    result_file,
+                    critical,
+                    test_suite,
+                    (aux + "-sub") if aux else aux
+                )
+    if "teardown" in test_suite:
+        run_test(
+            test_suite["teardown"],
+            namespace,
+            result_file,
+            False,
+            test_suite,
+            "teardown"
+        )
+    return test_passed
 
 
 def run(args):
+    if "--help" in args:
+        print("Usages: %s [test file] [input file] [options]..." % (args[0]))
+        print("Options:")
+        print(
+            "--help         : " +
+            "show this message"
+        )
+        print(
+            "--input <file> : " +
+            "specified the input map file"
+        )
+        print(
+            "--no-result    : " +
+            "do not generate testing result files (override config)"
+        )
+        print(
+            "--result       : " +
+            "generate testing result files (override config)"
+        )
+        print(
+            "--verbose      : " +
+            "print all the request and response body"
+        )
+        return
+
+    global INPUT_MAP, FLAGS
+    input_file_name = None
+    generate_result = None
+    test_files = []
+
     if "--verbose" in args:
-        global FLAGS
         FLAGS["verbose"] = True
         args.remove("--verbose")
+    if "--result" in args:
+        generate_result = True
+        args.remove("--result")
+    if "--no-result" in args:
+        generate_result = False
+        args.remove("--no-result")
+    if "--input" in args:
+        index = args.index("--input") + 1
+        if index < len(args):
+            input_file_name = args[index]
+            args.remove(input_file_name)
+        args.remove("--input")
+
     if len(args) < 2:
-        print("Usages: %s <test suite file>" % (args[0]))
-        return
-    test_suite_file = open(args[1], "r")
-    test_suite = json.load(test_suite_file)
-    test_suite_file.close()
+        if not os.path.exists(TEST_SUITE_FILE_NAME):
+            print("No test suite found")
+            exit(1)
+        test_suite_file = open(TEST_SUITE_FILE_NAME, "r", encoding="utf-8")
+        test_suite = load_json(test_suite_file.read())
+        test_suite_file.close()
+        if "run_test" in test_suite and not test_suite["run_test"]:
+            print("Skip testing")
+            exit(0)
+        if "input" in test_suite:
+            input_file_name = input_file_name or test_suite["input"]
+        if generate_result is None and "generate_result" in test_suite:
+            generate_result = test_suite["generate_result"]
+        if "tests" in test_suite:
+            test_files = test_suite["tests"]
+        print(":: Test suite loaded [%s tests] ::" % (len(test_files)))
+    else:
+        test_files.append(args[1])
+        if len(args) > 2:
+            input_file_name = input_file_name or args[2]
+            args.remove(input_file_name)
 
-    print("Test suite loaded: " + args[1])
+    generate_result = generate_result or False
 
-    if not run_test(process_macro(test_suite)):
-        exit(1)
+    if input_file_name and os.path.exists(input_file_name):
+        input_file = open(input_file_name, "r", encoding="utf-8")
+        INPUT_MAP = load_json(input_file.read())
+        input_file.close()
+        print(":: Input loaded: %s ::" % (input_file_name))
+
+    test_passed = True
+    result_file = None
+    if generate_result:
+        result_file = open(
+            TEST_RESULT_FILE_NAME,
+            "w",
+            encoding="utf-8"
+        )
+    for test_file_name in test_files:
+        if not os.path.exists(test_file_name):
+            print(":: Test is not found: %s ::" % (test_file_name))
+            continue
+        test_file = open(test_file_name, "r", encoding="utf-8")
+        test = load_json(test_file.read())
+        test_file.close()
+        print(":: Test loaded: %s ::" % (test_file_name))
+
+        file_name = os.path.splitext(os.path.basename(test_file_name))[0]
+        if not run_test(process_macro(test), file_name, result_file):
+            test_passed = False
+    if generate_result:
+        result_file.close()
+    exit(0 if test_passed else 1)
 
 if __name__ == "__main__":
     run(sys.argv)

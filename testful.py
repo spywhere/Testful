@@ -3,7 +3,7 @@
 # @Author: spywhere
 # @Date:   2015-10-02 09:54:10
 # @Last Modified by:   Sirisak Lueangsaksri
-# @Last Modified time: 2015-10-09 18:10:48
+# @Last Modified time: 2015-10-13 17:40:28
 
 import json
 import os
@@ -20,7 +20,7 @@ FLAGS = {
 INPUT_MAP = {}
 SPECIAL_MACROS = ["datetime"]
 MACROS = {}
-MACRO_PATTERN = re.compile("<%(\\w+)(:(.*[^%>]))?%>")
+MACRO_PATTERN = re.compile("<%(\\w+)(:(((%[^>])|[^%>])*))?%>")
 DATA_PATTERN = re.compile("<<([\\w-]+(\\.[\\w-]+)*)>>")
 TEST_SUITE_FILE_NAME = "test_config.yaml"
 TEST_RESULT_FILE_NAME = "results.testful"
@@ -51,6 +51,38 @@ def from_json(raw_data):
 
 def to_json(data):
     return json.dumps(data)
+
+
+def time_from_string(time_str):
+    match = re.match(
+        (
+            "((?P<day>-?\\d+)d)?((?P<hour>-?\\d+)h)?" +
+            "((?P<min>-?\\d+)m)?((?P<sec>-?\\d+)s)?" +
+            "((?P<ms>-?\\d+)ms)?"
+        ), time_str
+    )
+    success = False
+    duration = 0
+    if match:
+        if match.group("day"):
+            success = True
+            duration += int(match.group("day")) * 86400
+        if match.group("hour"):
+            success = True
+            duration += int(match.group("hour")) * 3600
+        if match.group("min"):
+            success = True
+            duration += int(match.group("min")) * 60
+        if match.group("sec"):
+            success = True
+            duration += int(match.group("sec"))
+        if match.group("ms"):
+            success = True
+            duration += float(match.group("ms") / 1000)
+    if success:
+        return duration
+    else:
+        return None
 
 
 def is_expected_data(actual, expect, critical=True, path=None):
@@ -112,19 +144,29 @@ def is_expected_data(actual, expect, critical=True, path=None):
 
 def gather_special_macro(name, format):
     if name == "datetime":
-        if format:
-            return time.strftime(format)
+        current_time = time.time()
+        if not format:
+            format = time.strftime(DEFAULT_DATE_TIME_FORMAT)
+        formats = format.split(":")
+        diff = time_from_string(formats[-1])
+        if len(formats) > 1 and diff is not None:
+            format = ":".join(formats[:-1])
         else:
-            return time.strftime(DEFAULT_DATE_TIME_FORMAT)
+            diff = 0
+            format = ":".join(formats)
+        return time.strftime(
+            format,
+            time.localtime(current_time + diff)
+        )
     return ""
 
 
-def gather_macro(key, type=None):
+def gather_macro(key, modifier=None):
     global INPUT_LINES, MACROS
     if key in MACROS:
         return MACROS[key]
     if key in SPECIAL_MACROS:
-        return gather_special_macro(key, type)
+        return gather_special_macro(key, modifier)
     if key in INPUT_MAP:
         value = str(INPUT_MAP[key])
         print("%s: %s" % (key, value))
@@ -190,7 +232,15 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
     if "parent_response" in parent:
         parent_response = parent["parent_response"]
     host = ""
-    verbose = "verbose" in test_suite and test_suite["verbose"]
+    verbose_on_failed = (
+        "verbose_on_failed" in parent and parent["verbose_on_failed"]
+    )
+    if "verbose_on_failed" in test_suite:
+        verbose_on_failed = test_suite["verbose_on_failed"]
+    verbose = "verbose" in parent and parent["verbose"]
+    if ("allow_verbose_override" not in parent or
+            not parent["allow_verbose_override"]) and "verbose" in test_suite:
+        verbose = test_suite["verbose"]
     if "host" in parent:
         host = parent["host"]
     if "host" in test_suite:
@@ -213,10 +263,11 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
     if "identifier" in test_suite:
         identifier = test_suite["identifier"]
     test_suite["name"] = name
+    skipped = "skip" in test_suite and test_suite["skip"]
     get_body = {}
     post_body = None
     expected_json = {}
-    if "setup" in test_suite:
+    if not skipped and "setup" in test_suite:
         setup_status = run_test(
             test_suite["setup"],
             namespace,
@@ -227,7 +278,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
         )
         if not setup_status:
             return False
-    if "get" in test_suite:
+    if not skipped and "get" in test_suite:
         get_body = process_body_data(
             test_suite["get"],
             parent_response
@@ -236,7 +287,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
             print(("=" * 10) + " GET " + ("=" * 10))
             print(represent_data(get_body))
             print("-" * 25)
-    if "post" in test_suite:
+    if not skipped and "post" in test_suite:
         post_body = process_body_data(
             test_suite["post"],
             parent_response
@@ -246,7 +297,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
             print(represent_data(post_body))
             print("-" * 26)
 
-    if "expected_json" in test_suite:
+    if not skipped and "expected_json" in test_suite:
         expected_json = process_body_data(
             test_suite["expected_json"],
             parent_response
@@ -259,6 +310,13 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
             print("Running %s... " % (name), end="")
         elif aux in ["setup", "teardown"]:
             print("Running auxillary %s request... " % (aux), end="")
+        if skipped:
+            print("skipped")
+            if result_file:
+                result_file.write("%s|%s|%.2f|skip\n" % (
+                    namespace, name, 0
+                ))
+            return True
         req = urllib.request.Request(
             host + path + "?" + urllib.parse.urlencode(
                 get_body
@@ -285,7 +343,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
                         namespace, name, elapse_time
                     ))
             print(assert_error)
-            if FLAGS["verbose"] or verbose:
+            if FLAGS["verbose"] or verbose or verbose_on_failed:
                 print(("=" * 10) + " FAILED " + ("=" * 10))
                 print(represent_data(actual_json))
                 print("-" * 28)

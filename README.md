@@ -26,8 +26,12 @@ Test structure is simply a one big test case which has the following format...
 
 ```yaml
 name: Name of the test
+skip: # Boolean for skipping the test
 host: Root URL of the request server
 path: Path to the request url
+verbose: # Boolean specified verbosity override
+verbose_on_failed: # Boolean for verbosity when test is failed
+allow_verbose_override: # Boolean for allow child to override the verbosity
 identifier: Macro query identifier
 setup: # Test Structure
 get: # Key/Value request body
@@ -41,6 +45,10 @@ tests:
 ```
 
 All fields are optional and will be processed with macros.
+
+`name` will be appends to the parent name.
+
+`host`, `path`, `verbose`, `verbose_on_failed` can be override by child tests.
 
 ### Testing Sequence
 Testful will run the test in the following sequence...
@@ -80,11 +88,15 @@ You can override the special macro with normal macro by simply create a macro wi
 
 - Date Time  
 **Identifier**: `datetime`  
-**Modifier**: [Python's date time format](https://docs.python.org/2/library/datetime.html#strftime-and-strptime-behavior)  
+**Modifier**: [Python's date time format](http://strftime.org) or `PythonDateTimeFormat:TimeDifference`  
+**Time Difference**: `<Day>d<Hour>h<Minute>m<Second>s<Millisecond>ms`  
 Returns the formatted date time specified by format modifier.
 
 **Example**:  
-`<%datetime:%d/%m/%Y%>` will returns `09/10/2015`.
+`<%datetime:%d/%m/%Y %H:%M:%S%>` will returns `09/10/2015 12:42:12`.  
+`<%datetime:%d%m%Y:5d%>` will returns `14/10/2015`.  
+`<%datetime:%d/%m/%Y:-1d%>` will returns `08/10/2015`.  
+`<%datetime:%H:%M:%S:-5h%>` will returns `07:42:12`.
 
 #### Response Data Macro
 Format: `<<Query>>` or `<<Identifier.Query>>`

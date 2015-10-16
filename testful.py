@@ -3,7 +3,7 @@
 # @Author: spywhere
 # @Date:   2015-10-02 09:54:10
 # @Last Modified by:   Sirisak Lueangsaksri
-# @Last Modified time: 2015-10-13 17:40:28
+# @Last Modified time: 2015-10-15 12:05:22
 
 import json
 import os
@@ -225,8 +225,8 @@ def process_body_data(body, data):
     return load_data(process_raw_data(data_obj, data))
 
 
-def run_test(test_suite, namespace, result_file=None, critical=True,
-             parent=None, aux=None):
+def run_test(test_suite, namespace, result_file=None, results=None,
+             critical=True, parent=None, aux=None):
     parent = parent or {}
     parent_response = {}
     if "parent_response" in parent:
@@ -264,6 +264,11 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
         identifier = test_suite["identifier"]
     test_suite["name"] = name
     skipped = "skip" in test_suite and test_suite["skip"]
+    timeout = None
+    if "timeout" in parent:
+        timeout = parent["timeout"]
+    if "timeout" in test_suite:
+        timeout = test_suite["timeout"]
     get_body = {}
     post_body = None
     expected_json = {}
@@ -272,6 +277,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
             test_suite["setup"],
             namespace,
             result_file,
+            results,
             False,
             parent,
             "setup"
@@ -297,7 +303,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
             print(represent_data(post_body))
             print("-" * 26)
 
-    if not skipped and "expected_json" in test_suite:
+    if "expected_json" in test_suite:
         expected_json = process_body_data(
             test_suite["expected_json"],
             parent_response
@@ -312,6 +318,8 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
             print("Running auxillary %s request... " % (aux), end="")
         if skipped:
             print("skipped")
+            if results:
+                results["skip"] += 1
             if result_file:
                 result_file.write("%s|%s|%.2f|skip\n" % (
                     namespace, name, 0
@@ -326,18 +334,24 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
         if post_body:
             req.add_header("Content-Type", "application/json")
             post_body = to_json(post_body).encode()
-        response = urllib.request.urlopen(req, post_body)
+        try:
+            response = urllib.request.urlopen(req, post_body, timeout)
+            actual_json = from_json(response.read().decode())
+            if "parent_response" not in test_suite:
+                test_suite["parent_response"] = {}
+            test_suite["parent_response"][identifier] = actual_json
 
-        actual_json = from_json(response.read().decode())
-        if "parent_response" not in test_suite:
-            test_suite["parent_response"] = {}
-        test_suite["parent_response"][identifier] = actual_json
+            assert_error = is_expected_data(actual_json, expected_json, critical)
+        except Exception as e:
+            assert_error = str(e)
+            actual_json = None
 
-        assert_error = is_expected_data(actual_json, expected_json, critical)
         elapse_time = time.time() - start_time
         if assert_error:
             if not aux or aux in ["setup", "teardown"] or verbose:
                 print("failed (%.2fs)" % (elapse_time))
+                if results:
+                    results["fail"] += 1
                 if result_file:
                     result_file.write("%s|%s|%.2f|fail\n" % (
                         namespace, name, elapse_time
@@ -345,13 +359,16 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
             print(assert_error)
             if FLAGS["verbose"] or verbose or verbose_on_failed:
                 print(("=" * 10) + " FAILED " + ("=" * 10))
-                print(represent_data(actual_json))
-                print("-" * 28)
+                if actual_json is not None:
+                    print(represent_data(actual_json))
+                    print("-" * 28)
             if critical:
                 test_passed = False
         else:
             if not aux or aux in ["setup", "teardown"] or verbose:
                 print("passed (%.2fs)" % (elapse_time))
+                if results:
+                    results["pass"] += 1
                 if result_file:
                     result_file.write("%s|%s|%.2f|pass\n" % (
                         namespace, name, elapse_time
@@ -368,6 +385,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
                     test,
                     namespace,
                     result_file,
+                    results,
                     critical,
                     test_suite,
                     (aux + "-sub") if aux else aux
@@ -377,6 +395,7 @@ def run_test(test_suite, namespace, result_file=None, critical=True,
             test_suite["teardown"],
             namespace,
             result_file,
+            results,
             False,
             test_suite,
             "teardown"
@@ -477,6 +496,11 @@ def run(args):
         print(":: Input loaded: %s ::" % (input_file_name))
 
     test_passed = True
+    results = {
+        "pass": 0,
+        "skip": 0,
+        "fail": 0
+    }
     result_file = None
     if generate_result:
         result_file = open(
@@ -494,10 +518,15 @@ def run(args):
         print(":: Test loaded: %s ::" % (test_file_name))
 
         file_name = os.path.splitext(os.path.basename(test_file_name))[0]
-        if not run_test(process_macro(test), file_name, result_file):
+        if not run_test(process_macro(test), file_name, result_file, results):
             test_passed = False
     if generate_result:
         result_file.close()
+    print("=" * 40)
+    print("Total tests run: %s, Failures: %s, Skips: %s" % (
+        sum([results[k] for k in results]), results["fail"], results["skip"]
+    ))
+    print("=" * 40)
     exit(0 if test_passed else 1)
 
 if __name__ == "__main__":

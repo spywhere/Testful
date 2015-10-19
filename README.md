@@ -36,6 +36,7 @@ identifier: Macro query identifier
 setup: # Test Structure
 get: # Key/Value request body
 post: # POST request body
+timeout: # Number of seconds before the timeout exception is thrown
 expected_json: # Expected response
 teardown: # Test Structure
 tests:

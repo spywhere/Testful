@@ -1,0 +1,19 @@
+<atlassian-plugin key="${project.groupId}.${project.artifactId}" name="${project.name}" plugins-version="2">
+    <plugin-info>
+        <description>${project.description}</description>
+        <version>${project.version}</version>
+        <vendor name="${project.organization.name}" url="${project.organization.url}" />
+        <param name="plugin-icon">images/pluginIcon.png</param>
+        <param name="plugin-logo">images/pluginLogo.png</param>
+    </plugin-info>
+    
+    <taskType key="com.mobilife.Testful" name="Testful Parser" class="com.mobilife.TestfulParser">
+  		<description>Parse the test result from testful testing framework</description>
+    	<category name="test"/>
+    	<configuration class="com.mobilife.TestfulParserConfigurator"/>
+    	<resource type="freemarker" name="edit" location="editTestfulParserTask.ftl"/>
+	</taskType>
+	
+    <component-import key="applicationProperties" interface="com.atlassian.sal.api.ApplicationProperties" />
+    
+</atlassian-plugin>

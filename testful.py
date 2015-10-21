@@ -3,8 +3,9 @@
 # @Author: spywhere
 # @Date:   2015-10-02 09:54:10
 # @Last Modified by:   Sirisak Lueangsaksri
-# @Last Modified time: 2015-10-15 12:05:22
+# @Last Modified time: 2015-10-21 17:05:03
 
+import base64
 import json
 import os
 import re
@@ -40,9 +41,9 @@ def represent_data(data):
 
 def save_data(data, out_file=None):
     if out_file:
-        return yaml.dump(data, out_file, allow_unicode=True, default_flow_style=False)
+        return yaml.dump(data, out_file, allow_unicode=True, default_flow_style=False, canonical=True)
     else:
-        return yaml.dump(data, allow_unicode=True)
+        return yaml.dump(data, allow_unicode=True, canonical=True)
 
 
 def from_json(raw_data):
@@ -142,20 +143,20 @@ def is_expected_data(actual, expect, critical=True, path=None):
             )
 
 
-def gather_special_macro(name, format):
+def gather_special_macro(name, dtformat):
     if name == "datetime":
         current_time = time.time()
-        if not format:
-            format = time.strftime(DEFAULT_DATE_TIME_FORMAT)
-        formats = format.split(":")
+        if not dtformat:
+            dtformat = time.strftime(DEFAULT_DATE_TIME_FORMAT)
+        formats = dtformat.split(":")
         diff = time_from_string(formats[-1])
         if len(formats) > 1 and diff is not None:
-            format = ":".join(formats[:-1])
+            dtformat = ":".join(formats[:-1])
         else:
             diff = 0
-            format = ":".join(formats)
+            dtformat = ":".join(formats)
         return time.strftime(
-            format,
+            dtformat,
             time.localtime(current_time + diff)
         )
     return ""
@@ -172,6 +173,8 @@ def gather_macro(key, modifier=None):
         print("%s: %s" % (key, value))
     else:
         value = input(key + ": ")
+    if modifier and modifier == "base64":
+        value = base64.encodestring(value.encode()).decode().strip()
     MACROS[key] = value
     return value
 
@@ -225,6 +228,20 @@ def process_body_data(body, data):
     return load_data(process_raw_data(data_obj, data))
 
 
+def process_post_body(body):
+    processed_body = {}
+    for key, value in body.items():
+        if isinstance(value, dict):
+            value = process_post_body(value)
+        if key.endswith("_raw"):
+            key = key[:-4]
+        elif key.endswith("_escaped") and isinstance(value, dict):
+            key = key[:-8]
+            value = to_json(value)
+        processed_body[key] = value
+    return processed_body
+
+
 def run_test(test_suite, namespace, result_file=None, results=None,
              critical=True, parent=None, aux=None):
     parent = parent or {}
@@ -237,6 +254,7 @@ def run_test(test_suite, namespace, result_file=None, results=None,
     )
     if "verbose_on_failed" in test_suite:
         verbose_on_failed = test_suite["verbose_on_failed"]
+    test_suite["verbose_on_failed"] = verbose_on_failed
     verbose = "verbose" in parent and parent["verbose"]
     if ("allow_verbose_override" not in parent or
             not parent["allow_verbose_override"]) and "verbose" in test_suite:
@@ -269,8 +287,11 @@ def run_test(test_suite, namespace, result_file=None, results=None,
         timeout = parent["timeout"]
     if "timeout" in test_suite:
         timeout = test_suite["timeout"]
+    test_suite["timeout"] = timeout
+    headers = {}
     get_body = {}
     post_body = None
+    json_body = None
     expected_json = {}
     if not skipped and "setup" in test_suite:
         setup_status = run_test(
@@ -293,16 +314,34 @@ def run_test(test_suite, namespace, result_file=None, results=None,
             print(("=" * 10) + " GET " + ("=" * 10))
             print(represent_data(get_body))
             print("-" * 25)
-    if not skipped and "post" in test_suite:
-        post_body = process_body_data(
-            test_suite["post"],
+    if not skipped and "json_post" in test_suite:
+        json_body = process_body_data(
+            test_suite["json_post"],
             parent_response
         )
+        if FLAGS["verbose"] or verbose:
+            print(("=" * 10) + " JSON POST " + ("=" * 10))
+            print(represent_data(json_body))
+            print("-" * 26)
+    if not skipped and "post" in test_suite:
+        post_body = process_post_body(process_body_data(
+            test_suite["post"],
+            parent_response
+        ))
         if FLAGS["verbose"] or verbose:
             print(("=" * 10) + " POST " + ("=" * 10))
             print(represent_data(post_body))
             print("-" * 26)
-
+    if "headers" in parent:
+        headers.update(process_body_data(
+            parent["headers"],
+            parent_response
+        ))
+    if "headers" in test_suite:
+        headers.update(process_body_data(
+            test_suite["headers"],
+            parent_response
+        ))
     if "expected_json" in test_suite:
         expected_json = process_body_data(
             test_suite["expected_json"],
@@ -327,13 +366,18 @@ def run_test(test_suite, namespace, result_file=None, results=None,
             return True
         req = urllib.request.Request(
             host + path + "?" + urllib.parse.urlencode(
-                get_body
+                get_body, True
             )
         )
 
+        for key, value in headers.items():
+            req.add_header(key, value)
+
         if post_body:
+            post_body = urllib.parse.urlencode(post_body, True).encode()
+        elif json_body:
             req.add_header("Content-Type", "application/json")
-            post_body = to_json(post_body).encode()
+            post_body = to_json(json_body).encode()
         try:
             response = urllib.request.urlopen(req, post_body, timeout)
             actual_json = from_json(response.read().decode())
@@ -408,6 +452,10 @@ def run(args):
         print("Usages: %s [test file] [input file] [options]..." % (args[0]))
         print("Options:")
         print(
+            "--config <file> : " +
+            "specified the test configuration file"
+        )
+        print(
             "--help         : " +
             "show this message"
         )
@@ -438,6 +486,7 @@ def run(args):
         return
 
     global INPUT_MAP, FLAGS
+    test_suite_file_name = TEST_SUITE_FILE_NAME
     input_file_name = None
     generate_result = None
     test_files = []
@@ -457,6 +506,12 @@ def run(args):
     if "--no-result" in args:
         generate_result = False
         args.remove("--no-result")
+    if "--config" in args:
+        index = args.index("--config") + 1
+        if index < len(args):
+            test_suite_file_name = args[index]
+            args.remove(test_suite_file_name)
+        args.remove("--config")
     if "--input" in args:
         index = args.index("--input") + 1
         if index < len(args):
@@ -465,10 +520,10 @@ def run(args):
         args.remove("--input")
 
     if len(args) < 2:
-        if not os.path.exists(TEST_SUITE_FILE_NAME):
+        if not os.path.exists(test_suite_file_name):
             print("No test suite found")
             exit(1)
-        test_suite_file = open(TEST_SUITE_FILE_NAME, "r", encoding="utf-8")
+        test_suite_file = open(test_suite_file_name, "r", encoding="utf-8")
         test_suite = load_data(test_suite_file.read())
         test_suite_file.close()
         if "run_test" in test_suite and not test_suite["run_test"]:

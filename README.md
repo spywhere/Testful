@@ -29,13 +29,15 @@ name: Name of the test
 skip: # Boolean for skipping the test
 host: Root URL of the request server
 path: Path to the request url
+headers: # A key/value pairs for additional headers
 verbose: # Boolean specified verbosity override
 verbose_on_failed: # Boolean for verbosity when test is failed
 allow_verbose_override: # Boolean for allow child to override the verbosity
 identifier: Macro query identifier
 setup: # Test Structure
 get: # Key/Value request body
-post: # POST request body
+post: # POST request body (details below)
+json_post: # Request body which will be encoded as JSON
 timeout: # Number of seconds before the timeout exception is thrown
 expected_json: # Expected response
 teardown: # Test Structure
@@ -50,6 +52,8 @@ All fields are optional and will be processed with macros.
 `name` will be appends to the parent name.
 
 `host`, `path`, `verbose`, `verbose_on_failed` can be override by child tests.
+
+In POST request body, if dictionary has a key name ends with `_escaped`, the dictionary will be escaped into a raw string, otherwise will transform into multiple values.
 
 ### Testing Sequence
 Testful will run the test in the following sequence...
@@ -81,6 +85,15 @@ Input macro will ask for the input data and replace the macro with it.
 By default, macro will look up from the input map file for the missing key, if the value is not found, user input will be asked instead. After receiving the value (from any source), the macro is set and will be reuse for the whole procedure.
 
 Macros is a file global variable and cannot be accessed across the different files.
+
+##### Modifiers
+A modifier is a name of function which will modify the data before use in the macro. These are available modifiers to be used...
+
+- `base64`  
+Encode the value into a base 64 string
+
+**Example**:  
+`<%Authorization:base64%>` will returns `dXNlcjpwYXNzd29yZA==` if `Authorization` is `user:password`.
 
 ##### Special Macros
 Special macro has a dynamic return value which can be changed based on current context of the test.

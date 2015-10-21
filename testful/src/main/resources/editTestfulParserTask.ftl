@@ -1,0 +1,1 @@
+[@s.textfield labelKey='testful.parser.testPattern' name='testPattern' required=true /]
